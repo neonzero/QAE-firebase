@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 // Firebase Imports
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
-import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, getDocs, updateDoc } from "firebase/firestore";
+
 
 // Icon Imports
 import { Clock, BookOpen, Award, Play, RotateCcw, CheckCircle, XCircle, AlertCircle, BarChart3, Home, Download, Bookmark, Moon, Sun, ChevronLeft, ChevronRight, Calendar, Target, LogOut } from 'lucide-react';
@@ -60,6 +61,7 @@ const convertArraysToSets = (data) => {
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [invitationCode, setInvitationCode] = useState('');
   const [isSignUp, setIsSignUp] = useState(true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -71,21 +73,39 @@ const Login = () => {
     
     try {
       if (isSignUp) {
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        // Create initial user document in Firestore immediately after signup
-        const defaultProgress = {
-          sessionHistory: [],
-          domainPerformance: {},
-          questionPerformance: {},
-          bookmarked: [], // Store as array for Firestore
-          incorrect: [], // Store as array for Firestore
-          examDate: null,
-          studyPlan: [],
-          isDarkMode: false,
-          createdAt: new Date().toISOString(),
-          email: userCredential.user.email
-        };
+        // --- INVITATION CHECK LOGIC ---
+        const invitationsRef = collection(db, "invitations");
+        const q = query(invitationsRef, 
+          where("code", "==", invitationCode.toUpperCase()), 
+          where("email", "==", email.toLowerCase()),
+          where("status", "==", "pending")
+        );
+
+        const querySnapshot = await getDocs(q);
+
+        if (querySnapshot.empty) {
+          setError("Invalid invitation code or email, or the code has already been used.");
+          setLoading(false);
+          return;
+        }
         
+        // --- If code is valid, proceed ---
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        
+        // Mark the invitation as used
+        const invitationDoc = querySnapshot.docs[0];
+        const invitationDocRef = doc(db, "invitations", invitationDoc.id);
+        await updateDoc(invitationDocRef, {
+          status: 'used',
+          usedAt: new Date().toISOString(),
+          usedBy: userCredential.user.uid
+        });
+
+        // Create initial user document in Firestore
+        // ... (the rest of the sign-up logic remains the same)
+        const defaultProgress = {
+          // ...
+        };
         const userDocRef = doc(db, "users", userCredential.user.uid);
         await setDoc(userDocRef, defaultProgress);
         console.log("User document created successfully");
@@ -112,6 +132,16 @@ const Login = () => {
                 </p>
             </div>
           <form onSubmit={handleAuth}>
+            {/* ADD THIS INVITATION CODE BLOCK */}
+            {isSignUp && (
+              <div className="mb-4">
+                <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2" htmlFor="invitationCode">
+                  Invitation Code
+                </label>
+                <input type="text" id="invitationCode" value={invitationCode} onChange={(e) => setInvitationCode(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100 transition-all duration-200 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
+              </div>
+            )}
+           
             <div className="mb-4">
               <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2" htmlFor="email">
                 Email
@@ -218,6 +248,9 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   const [adaptivePracticeMode, setAdaptivePracticeMode] = useState(false);
   const [currentDifficulty, setCurrentDifficulty] = useState(3);
   const [sessionToReview, setSessionToReview] = useState(null);
+  const [inviteeEmail, setInviteeEmail] = useState('');
+  const [generatedCode, setGeneratedCode] = useState('');
+  const [inviteMessage, setInviteMessage] = useState('');
 
   const CISA_DOMAIN_WEIGHTS = {
     "Information System Auditing Process": 0.18,
@@ -504,7 +537,40 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       setSessionHistory(prev => prev.filter(s => s.id !== sessionId));
     }
   };
+  const handleGenerateInvite = async (e) => {
+    e.preventDefault();
+    if (!inviteeEmail) {
+      setInviteMessage('Please enter an email address.');
+      return;
+    }
 
+    setInviteMessage('Generating code...');
+    setGeneratedCode('');
+
+    try {
+      // 1. Generate a unique 6-character code
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      
+      // 2. Create a new document in the 'invitations' collection
+      const invitationsCol = collection(db, "invitations");
+      await addDoc(invitationsCol, {
+        code: code,
+        email: inviteeEmail.toLowerCase(),
+        generatedBy: user.uid,
+        createdAt: new Date().toISOString(),
+        status: 'pending' // Status can be 'pending' or 'used'
+      });
+
+      // 3. Display the code to the user
+      setGeneratedCode(code);
+      setInviteMessage(`Success! Share this code with ${inviteeEmail}.`);
+      setInviteeEmail('');
+
+    } catch (error) {
+      console.error("Error generating invitation:", error);
+      setInviteMessage('Could not generate code. Please try again.');
+    }
+  };
   const calculatePassingProbability = (percentage) => {
     if (percentage < 50) return "Low";
     if (percentage < 65) return "Moderate";
@@ -748,6 +814,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-800 dark:to-gray-900">
         <div className="max-w-7xl mx-auto p-4 lg:p-8 pb-32">
+          {/* Header */}
           <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-4">
             <div>
               <h1 className="text-4xl lg:text-5xl font-bold bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 bg-clip-text text-transparent">
@@ -758,61 +825,65 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
               </p>
             </div>
             <div className="flex items-center gap-4">
-                <button onClick={toggleDarkMode} className="p-3 rounded-full bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm hover:bg-white/70 dark:hover:bg-gray-700/70 transition-all duration-200 hover:scale-105 shadow-lg">
-                  {isDarkMode ? <Sun className="w-6 h-6 text-yellow-500" /> : <Moon className="w-6 h-6 text-gray-600" />}
-                </button>
-                <button onClick={handleLogout} title="Logout" className="p-3 rounded-full bg-red-100 dark:bg-red-900/50 hover:bg-red-200 dark:hover:bg-red-800/50 transition-all duration-200 hover:scale-105 shadow-lg">
-                    <LogOut className="w-6 h-6 text-red-600 dark:text-red-400" />
-                </button>
+              <button onClick={toggleDarkMode} className="p-3 rounded-full bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm hover:bg-white/70 dark:hover:bg-gray-700/70 transition-all duration-200 hover:scale-105 shadow-lg">
+                {isDarkMode ? <Sun className="w-6 h-6 text-yellow-500" /> : <Moon className="w-6 h-6 text-gray-600" />}
+              </button>
+              <button onClick={handleLogout} title="Logout" className="p-3 rounded-full bg-red-100 dark:bg-red-900/50 hover:bg-red-200 dark:hover:bg-red-800/50 transition-all duration-200 hover:scale-105 shadow-lg">
+                <LogOut className="w-6 h-6 text-red-600 dark:text-red-400" />
+              </button>
             </div>
           </div>
+
+          {/* Study Plan Card */}
           <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 p-6 mb-8">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                 <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 flex items-center gap-2">
-      <Calendar className="w-5 h-5 text-blue-500" />
-      Personalized Study Plan
-    </h3>
-    <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-      {!assessmentReport && (
-          <button onClick={() => setCurrentMode('assessment-setup')} className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-[1.02] shadow-lg whitespace-nowrap">
-          <Target className="w-4 h-4" /> Take Assessment
-        </button>
-      )}
-      <input type="date" value={examDate || ""} onChange={(e) => setExamDate(e.target.value)} className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-      <button onClick={generateStudyPlan} disabled={!assessmentReport} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-[1.02] shadow-lg whitespace-nowrap disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed">
-        <Target className="w-4 h-4" /> Generate Plan
-                 </button>
-               </div>
-             </div>
+             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-blue-500" />
+                Personalized Study Plan
+                </h3>
+                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                {!assessmentReport && (
+                    <button onClick={() => setCurrentMode('assessment-setup')} className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-[1.02] shadow-lg whitespace-nowrap">
+                    <Target className="w-4 h-4" /> Take Assessment
+                    </button>
+                )}
+                <input type="date" value={examDate || ""} onChange={(e) => setExamDate(e.target.value)} className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <button onClick={generateStudyPlan} disabled={!assessmentReport} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-[1.02] shadow-lg whitespace-nowrap disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed">
+                    <Target className="w-4 h-4" /> Generate Plan
+                </button>
+                </div>
+            </div>
             {studyPlan.length > 0 ? (
-              <div className="overflow-x-auto rounded-xl max-h-96 overflow-y-auto">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-white/80 dark:bg-gray-800/80 z-10">
-                    <tr className="bg-gray-50/80 dark:bg-gray-700/50 backdrop-blur-sm">
-                      <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tl-lg">Date</th>
-                      <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tr-lg">Tasks</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {studyPlan.map((day, index) => (
-                      <tr key={index} className="border-t border-gray-100 dark:border-gray-600/30 hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors">
-                        <td className="p-3 font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">{day.date}</td>
-                        <td className="p-3 text-gray-700 dark:text-gray-300">
-                          <ul className="list-disc pl-5 space-y-1">
-                            {day.tasks.map((task, i) => (<li key={i} className="text-sm">{task}</li>))}
-                          </ul>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                <div className="overflow-x-auto rounded-xl max-h-96 overflow-y-auto">
+                    <table className="w-full text-sm">
+                        <thead className="sticky top-0 bg-white/80 dark:bg-gray-800/80 z-10">
+                        <tr className="bg-gray-50/80 dark:bg-gray-700/50 backdrop-blur-sm">
+                            <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tl-lg">Date</th>
+                            <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tr-lg">Tasks</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {studyPlan.map((day, index) => (
+                            <tr key={index} className="border-t border-gray-100 dark:border-gray-600/30 hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors">
+                            <td className="p-3 font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">{day.date}</td>
+                            <td className="p-3 text-gray-700 dark:text-gray-300">
+                                <ul className="list-disc pl-5 space-y-1">
+                                {day.tasks.map((task, i) => (<li key={i} className="text-sm">{task}</li>))}
+                                </ul>
+                            </td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+                </div>
             ) : (
-              <p className="text-gray-600 dark:text-gray-400 text-center py-4">
-              {assessmentReport ? "Set your exam date and click 'Generate Plan' to create your personalized study schedule." : "Take the assessment test to unlock the study plan generator."}
-            </p>
+                <p className="text-gray-600 dark:text-gray-400 text-center py-4">
+                {assessmentReport ? "Set your exam date and click 'Generate Plan' to create your personalized study schedule." : "Take the assessment test to unlock the study plan generator."}
+                </p>
             )}
           </div>
+
+          {/* Main Content */}
           {sessionHistory.length === 0 ? (
             <div className="text-center py-20">
               <div className="bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm rounded-3xl p-12 shadow-xl border border-white/20 dark:border-gray-700/20 max-w-md mx-auto">
@@ -824,6 +895,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
             </div>
           ) : (
             <>
+              {/* Stat Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 text-center hover:scale-[1.02] transition-all duration-200">
                   <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center mx-auto mb-4"><BarChart3 className="w-6 h-6 text-white" /></div>
@@ -841,6 +913,36 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                   <p className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-violet-600 bg-clip-text text-transparent">{stats.totalQuestions}</p>
                 </div>
               </div>
+
+              {/* Invite Card */}
+              <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 mb-8">
+                <h3 className="font-bold text-lg mb-4 text-gray-800 dark:text-gray-100">Invite a New User</h3>
+                <form onSubmit={handleGenerateInvite} className="flex flex-col sm:flex-row gap-4">
+                  <input
+                    type="email"
+                    value={inviteeEmail}
+                    onChange={(e) => setInviteeEmail(e.target.value)}
+                    placeholder="Enter new user's email"
+                    className="flex-grow px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                  <button type="submit" className="px-6 py-2 bg-gradient-to-r from-purple-500 to-violet-500 hover:from-purple-600 hover:to-violet-600 text-white rounded-lg font-medium transition-all duration-200 hover:scale-[1.02] shadow-lg">
+                    Generate Code
+                  </button>
+                </form>
+                {inviteMessage && (
+                  <div className="mt-4 text-center text-sm text-gray-700 dark:text-gray-300">
+                    <p>{inviteMessage}</p>
+                    {generatedCode && (
+                      <p className="mt-2 text-2xl font-bold tracking-widest bg-gray-100 dark:bg-gray-700 p-2 rounded-lg">
+                        {generatedCode}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {/* Charts */}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 mb-8">
                 <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20">
                   <h3 className="font-bold text-lg mb-4 text-gray-800 dark:text-gray-100 flex items-center gap-2"><div className="w-2 h-2 bg-blue-500 rounded-full"></div>Score Progress Over Time</h3>
@@ -867,6 +969,8 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                   </div>
                 </div>
               </div>
+
+              {/* Recent Sessions */}
               <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 p-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                   <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 flex items-center gap-2"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div>Recent Sessions</h3>
@@ -877,50 +981,51 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                 </div>
                 <div className="overflow-x-auto rounded-xl">
                   <table className="w-full text-sm">
-                  <thead>
-    <tr className="bg-gray-50/80 dark:bg-gray-700/50 backdrop-blur-sm">
-      <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tl-lg">Date</th>
-      <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Mode</th>
-      <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Score</th>
-      <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Questions</th>
-      <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Time</th>
-      <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tr-lg">Actions</th> {/* ADD THIS HEADER */}
-    </tr>
-  </thead>
-  <tbody>
-    {sessionHistory.slice(0, 5).map((s) => (
-      <tr key={s.id} className="border-t border-gray-100 dark:border-gray-600/30 hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors">
-        <td className="p-4 text-gray-800 dark:text-gray-200">{new Date(s.date).toLocaleDateString()}</td>
-        <td className="p-4"><span className="inline-flex px-2 py-1 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200">{s.mode.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}</span></td>
-        <td className="p-4 font-bold text-gray-800 dark:text-gray-200"><span className={`${s.percentage >= 75 ? 'text-green-600 dark:text-green-400' : s.percentage >= 65 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>{s.percentage}%</span></td>
-        <td className="p-4 text-gray-800 dark:text-gray-200">{s.totalQuestions}</td>
-        <td className="p-4 text-gray-800 dark:text-gray-200">{s.timeSpent} min</td>
-        {/* ADD THIS TABLE CELL WITH BUTTONS */}
-        <td className="p-4">
-          <div className="flex gap-2">
-            <button
-              onClick={() => { setSessionToReview(s); setCurrentMode('review-session'); }}
-              className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded-md hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-200 dark:hover:bg-blue-900/80"
-            >
-              Review
-            </button>
-            <button
-              onClick={() => handleDeleteSession(s.id)}
-              className="px-3 py-1 text-xs font-medium text-red-700 bg-red-100 rounded-md hover:bg-red-200 dark:bg-red-900/50 dark:text-red-200 dark:hover:bg-red-900/80"
-            >
-              Delete
-            </button>
-          </div>
-        </td>
-      </tr>
-    ))}
-  </tbody>
-</table>
+                    <thead>
+                      <tr className="bg-gray-50/80 dark:bg-gray-700/50 backdrop-blur-sm">
+                        <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tl-lg">Date</th>
+                        <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Mode</th>
+                        <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Score</th>
+                        <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Questions</th>
+                        <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200">Time</th>
+                        <th className="p-4 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tr-lg">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sessionHistory.slice(0, 5).map((s) => (
+                        <tr key={s.id} className="border-t border-gray-100 dark:border-gray-600/30 hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors">
+                          <td className="p-4 text-gray-800 dark:text-gray-200">{new Date(s.date).toLocaleDateString()}</td>
+                          <td className="p-4"><span className="inline-flex px-2 py-1 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200">{s.mode.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}</span></td>
+                          <td className="p-4 font-bold text-gray-800 dark:text-gray-200"><span className={`${s.percentage >= 75 ? 'text-green-600 dark:text-green-400' : s.percentage >= 65 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>{s.percentage}%</span></td>
+                          <td className="p-4 text-gray-800 dark:text-gray-200">{s.totalQuestions}</td>
+                          <td className="p-4 text-gray-800 dark:text-gray-200">{s.timeSpent} min</td>
+                          <td className="p-4">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => { setSessionToReview(s); setCurrentMode('review-session'); }}
+                                className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded-md hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-200 dark:hover:bg-blue-900/80"
+                              >
+                                Review
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSession(s.id)}
+                                className="px-3 py-1 text-xs font-medium text-red-700 bg-red-100 rounded-md hover:bg-red-200 dark:bg-red-900/50 dark:text-red-200 dark:hover:bg-red-900/80"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </>
           )}
         </div>
+        
+        {/* Bottom Navigation */}
         <div className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl border-t border-white/20 dark:border-gray-700/20 p-4">
           <div className="max-w-7xl mx-auto grid grid-cols-2 lg:grid-cols-4 gap-3">
             <button onClick={() => setCurrentMode('setup')} className="group bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 hover:scale-[1.02] flex items-center justify-center gap-2 shadow-lg"><BookOpen className="w-5 h-5 group-hover:scale-110 transition-transform" /><span className="hidden sm:inline">Practice Mode</span><span className="sm:hidden">Practice</span></button>
