@@ -145,20 +145,20 @@ const Login = () => {
                 <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2" htmlFor="invitationCode">
                   Invitation Code
                 </label>
-                <input type="text" id="invitationCode" value={invitationCode} onChange={(e) => setInvitationCode(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100 transition-all duration-200 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
+                <input type="text" id="invitationCode" value={invitationCode} onChange={(e) => setInvitationCode(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 dark:text-gray-100 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
               </div>
             )}
             <div className="mb-4">
               <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2" htmlFor="email">
                 Email
               </label>
-              <input type="email" id="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100 transition-all duration-200 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
+              <input type="email" id="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 dark:text-gray-100 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
             </div>
             <div className="mb-6">
               <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2" htmlFor="password">
                 Password
               </label>
-              <input type="password" id="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100 transition-all duration-200 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
+              <input type="password" id="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 dark:text-gray-100 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm" required />
             </div>
             {error && <p className="text-red-500 text-xs italic mb-4 text-center">{error}</p>}
             <div className="flex flex-col gap-4">
@@ -625,7 +625,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       setupContent = (
         <div className="space-y-3">
           <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Exam Duration & Questions</label>
-          <select value={examQuestionCount} onChange={(e) => setExamQuestionCount(Number(e.target.value))} className="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 dark:bg-gray-700">
+          <select value={examQuestionCount} onChange={(e) => setExamQuestionCount(Number(e.target.value))} className="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700">
             <option value={150}>150 Questions (4 hours) - Full Exam</option>
             <option value={100}>100 Questions (~2h 40m) - Practice Exam</option>
             <option value={50}>50 Questions (~1h 20m) - Quick Test</option>
@@ -638,7 +638,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       setupContent = (
         <div className="space-y-3">
           <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Number of Questions</label>
-          <select value={assessmentQuestionCount} onChange={(e) => setAssessmentQuestionCount(Number(e.target.value))} className="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 dark:bg-gray-700">
+          <select value={assessmentQuestionCount} onChange={(e) => setAssessmentQuestionCount(Number(e.target.value))} className="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700">
             <option value={60}>60 Questions</option>
             <option value={120}>120 Questions</option>
           </select>
@@ -657,7 +657,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
           </div>
           <div className="space-y-3">
             <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Knowledge Domain</label>
-            <select value={selectedDomain} onChange={(e) => setSelectedDomain(e.target.value)} className="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 dark:bg-gray-700">
+            <select value={selectedDomain} onChange={(e) => setSelectedDomain(e.target.value)} className="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700">
               <option value="all">All Domains ({allQuestions.length})</option>
               {availableDomains.map(d => (
                 <option key={d} value={d}>{d} ({allQuestions.filter(q => q.domain === d).length})</option>
