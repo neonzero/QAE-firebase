@@ -956,21 +956,30 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                 const isSelected = selectedAnswer === index;
                 const isCorrect = index === currentQ.correctAnswer;
                 let buttonClass = "w-full p-4 text-left rounded-xl border-2 ";
+                
                 if (showExplanation) {
-                  if (isCorrect) buttonClass += "bg-green-100 border-green-400";
-                  else if (isSelected) buttonClass += "bg-red-100 border-red-400";
-                  else buttonClass += "bg-gray-50 border-gray-200";
+                  if (isCorrect) {
+                    buttonClass += "bg-green-100 dark:bg-green-900/30 border-green-400 text-green-800 dark:text-green-300";
+                  } else if (isSelected && !isCorrect) {
+                    buttonClass += "bg-red-100 dark:bg-red-900/30 border-red-400 text-red-800 dark:text-red-300";
+                  } else {
+                    buttonClass += "bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 text-gray-900 dark:text-gray-300";
+                  }
                 } else {
-                  if (isSelected) buttonClass += "bg-blue-100 border-blue-400";
-                  else buttonClass += "bg-white hover:bg-gray-50 border-gray-200";
+                  if (isSelected) {
+                    buttonClass += "bg-blue-100 dark:bg-blue-900/30 border-blue-400 text-blue-800 dark:text-blue-300";
+                  } else {
+                    buttonClass += "bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-900 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600";
+                  }
                 }
+
                 return (
                   <button key={index} onClick={() => handleAnswerSelect(currentQ.id, index)} disabled={showExplanation} className={buttonClass}>
                     <div className="flex items-center gap-3">
-                      <span className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-medium">
+                      <span className="w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-600 flex items-center justify-center text-sm font-medium">
                         {String.fromCharCode(65 + index)}
                       </span>
-                      <span>{option}</span>
+                      <span className="flex-1">{option}</span>
                     </div>
                   </button>
                 );
