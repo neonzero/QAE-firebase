@@ -1040,9 +1040,13 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                   <div className="space-y-3 mb-4">
                     {q.options.map((option, optIndex) => {
                       let optionClass = "w-full p-3 text-left rounded-lg border ";
-                      if (optIndex === q.correctAnswer) optionClass += "bg-green-100 border-green-300";
-                      else if (optIndex === selectedAnswerIndex) optionClass += "bg-red-100 border-red-300";
-                      else optionClass += "bg-gray-50 border-gray-200";
+                      if (optIndex === q.correctAnswer) {
+                        optionClass += "bg-green-100 border-green-300 text-green-800 dark:bg-green-900/30 dark:border-green-700 dark:text-green-300";
+                      } else if (optIndex === selectedAnswerIndex) {
+                        optionClass += "bg-red-100 border-red-300 text-red-800 dark:bg-red-900/30 dark:border-red-700 dark:text-red-300";
+                      } else {
+                        optionClass += "bg-gray-50 border-gray-200 text-gray-800 dark:bg-gray-700/50 dark:border-gray-600 dark:text-gray-300";
+                      }
                       return (
                         <div key={optIndex} className={optionClass}>
                             <span>{String.fromCharCode(65 + optIndex)}. </span>{option}
