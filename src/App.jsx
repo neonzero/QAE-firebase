@@ -261,6 +261,15 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     "INFORMATION SYSTEMS OPERATIONS AND BUSINESS RESILIENCE": 0.26,
     "PROTECTION OF INFORMATION ASSETS": 0.26,
   };
+
+  const DOMAIN_MAP = {
+    "INFORMATION SYSTEM AUDITING PROCESS": "DOMAIN 1",
+    "GOVERNANCE AND MANAGEMENT OF IT": "DOMAIN 2",
+    "INFORMATION SYSTEMS ACQUISITION, DEVELOPMENT AND IMPLEMENTATION": "DOMAIN 3",
+    "INFORMATION SYSTEMS OPERATIONS AND BUSINESS RESILIENCE": "DOMAIN 4",
+    "PROTECTION OF INFORMATION ASSETS": "DOMAIN 5",
+    "GENERAL": "GENERAL"
+  };
   
   useEffect(() => {
     const saveProgressToFirestore = async () => {
@@ -553,16 +562,8 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     return { averageScore: Math.round(averageScore), totalSessions: sessionHistory.length, totalQuestions };
   };
 
-  const abbreviateDomain = (domain) => {
-    const words = domain.split(' ');
-    if (words.length > 2) {
-      return words.map(word => word[0]).join('');
-    }
-    return domain;
-  };
-
   const getDomainChartData = () => Object.entries(domainPerformance).map(([domain, stats]) => ({
-    name: abbreviateDomain(domain),
+    name: DOMAIN_MAP[domain] || domain,
     fullName: domain,
     percentage: stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0
   }));
