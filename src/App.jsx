@@ -561,7 +561,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     const averageScore = sessionHistory.reduce((sum, s) => sum + s.percentage, 0) / sessionHistory.length;
     return { averageScore: Math.round(averageScore), totalSessions: sessionHistory.length, totalQuestions };
   };
-
+  
   const getDomainChartData = () => Object.entries(domainPerformance).map(([domain, stats]) => ({
     name: DOMAIN_MAP[domain] || domain,
     fullName: domain,
