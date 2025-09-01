@@ -103,7 +103,6 @@ const Login = () => {
         // Create initial user document in Firestore
         const defaultProgress = {
           sessionHistory: [],
-          domainPerformance: {},
           questionPerformance: {},
           bookmarked: [], // Store as array for Firestore
           incorrect: [], // Store as array for Firestore
@@ -236,7 +235,6 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   const [examQuestionCount, setExamQuestionCount] = useState(150);
   const [availableDomains, setAvailableDomains] = useState([]);
   const [sessionHistory, setSessionHistory] = useState(initialProgress.sessionHistory);
-  const [domainPerformance, setDomainPerformance] = useState(initialProgress.domainPerformance);
   const [questionPerformance, setQuestionPerformance] = useState(initialProgress.questionPerformance);
   const [bookmarkedQuestions, setBookmarkedQuestions] = useState(initialProgress.bookmarkedQuestions);
   const [incorrectlyAnswered, setIncorrectlyAnswered] = useState(initialProgress.incorrectlyAnswered);
@@ -270,6 +268,23 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     "PROTECTION OF INFORMATION ASSETS": "DOMAIN 5",
     "GENERAL": "GENERAL"
   };
+
+  const domainPerformance = React.useMemo(() => {
+    const performance = {};
+    sessionHistory.forEach(session => {
+        if (session.domainBreakdown) {
+            for (const domain in session.domainBreakdown) {
+                const upperDomain = domain.toUpperCase(); // Normalize the key
+                if (!performance[upperDomain]) {
+                    performance[upperDomain] = { correct: 0, total: 0 };
+                }
+                performance[upperDomain].correct += session.domainBreakdown[domain].correct;
+                performance[upperDomain].total += session.domainBreakdown[domain].total;
+            }
+        }
+    });
+    return performance;
+  }, [sessionHistory]);
   
   useEffect(() => {
     const saveProgressToFirestore = async () => {
@@ -277,7 +292,6 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       try {
         const progressData = convertSetsToArrays({
           sessionHistory,
-          domainPerformance,
           questionPerformance,
           bookmarkedQuestions,
           incorrectlyAnswered,
@@ -295,7 +309,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     };
     const handler = setTimeout(saveProgressToFirestore, 2000);
     return () => clearTimeout(handler);
-  }, [sessionHistory, domainPerformance, questionPerformance, bookmarkedQuestions, incorrectlyAnswered, examDate, studyPlan, isDarkMode, user, assessmentReport]);
+  }, [sessionHistory, questionPerformance, bookmarkedQuestions, incorrectlyAnswered, examDate, studyPlan, isDarkMode, user, assessmentReport]);
 
   const handleLogout = async () => {
     try {
@@ -485,15 +499,6 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       selectedAnswers: { ...selectedAnswers },
     };
     setSessionHistory(prev => [sessionData, ...prev]);
-    setDomainPerformance(prev => {
-      const updated = { ...prev };
-      for (const domain in domainBreakdown) {
-        if (!updated[domain]) updated[domain] = { correct: 0, total: 0 };
-        updated[domain].correct += domainBreakdown[domain].correct;
-        updated[domain].total += domainBreakdown[domain].total;
-      }
-      return updated;
-    });
     return sessionData;
   };
 
@@ -562,11 +567,13 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     return { averageScore: Math.round(averageScore), totalSessions: sessionHistory.length, totalQuestions };
   };
   
-  const getDomainChartData = () => Object.entries(domainPerformance).map(([domain, stats]) => ({
-    name: DOMAIN_MAP[domain] || domain,
-    fullName: domain,
-    percentage: stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0
-  }));
+  const getDomainChartData = () => Object.entries(domainPerformance)
+    .map(([domain, stats]) => ({
+      name: DOMAIN_MAP[domain] || domain,
+      fullName: domain,
+      percentage: stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0
+    }))
+    .sort((a, b) => b.percentage - a.percentage);
 
   const getProgressChartData = () => sessionHistory.slice().reverse().map((session, index) => ({
     session: `S${index + 1}`,
@@ -578,23 +585,32 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       alert("Please set an exam date first.");
       return;
     }
-    if (!assessmentReport) {
-        alert("Please take the assessment test first.");
-        return;
+
+    const totalQuestions = sessionHistory.reduce((sum, s) => sum + s.totalQuestions, 0);
+    const canGenerate = assessmentReport || totalQuestions >= 100;
+
+    if (!canGenerate) {
+      alert(`Please complete the initial assessment or answer at least ${100 - totalQuestions} more questions to generate a study plan.`);
+      return;
     }
+
+    const performanceSource = assessmentReport && totalQuestions < 100 ? assessmentReport.domainBreakdown : domainPerformance;
+
     const examDateObj = new Date(examDate);
     const today = new Date();
     const daysUntilExam = Math.ceil((examDateObj.getTime() - today.getTime()) / (1000 * 3600 * 24));
+    
     if (daysUntilExam <= 0) {
       alert("Exam date must be in the future.");
       return;
     }
+    
     const newPlan = [];
     const avgQuestionsPerDay = Math.max(20, Math.round((allQuestions.length * 0.8) / daysUntilExam));
-    const weakDomains = Object.entries(assessmentReport.domainBreakdown)
+    const weakDomains = Object.entries(performanceSource)
       .filter(([, stats]) => stats.total > 0 && (stats.correct / stats.total) < 0.7)
       .map(([domain]) => domain);
-    const strongDomains = Object.entries(assessmentReport.domainBreakdown)
+    const strongDomains = Object.entries(performanceSource)
       .filter(([, stats]) => stats.total > 0 && (stats.correct / stats.total) >= 0.8)
       .map(([domain]) => domain);
 
@@ -621,7 +637,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       newPlan.push({ date: dateString, tasks });
     }
     setStudyPlan(newPlan);
-    alert("Study plan generated!");
+    alert(`Study plan has been ${studyPlan.length > 0 ? 'updated' : 'generated'}!`);
   };
 
   const handleDomainToggle = (domain) => {
@@ -640,7 +656,155 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   const incorrectToReview = allQuestions.filter(q => incorrectlyAnswered.has(q.id));
   const bookmarkedToReview = allQuestions.filter(q => bookmarkedQuestions.has(q.id));
 
-  if (currentMode === 'setup' || currentMode === 'exam-setup' || currentMode === 'assessment-setup') {
+  const detailedDomainStats = React.useMemo(() => {
+    const stats = {};
+
+    availableDomains.forEach(domain => {
+      stats[domain] = {
+        totalQuestions: allQuestions.filter(q => q.domain === domain).length,
+        attempted: 0,
+        correct: 0,
+        incorrectCount: 0,
+        performance: 0,
+      };
+    });
+
+    for (const domain in domainPerformance) {
+        if (stats[domain]) {
+            stats[domain].attempted = domainPerformance[domain].total;
+            stats[domain].correct = domainPerformance[domain].correct;
+            stats[domain].performance = domainPerformance[domain].total > 0
+                ? Math.round((domainPerformance[domain].correct / domainPerformance[domain].total) * 100)
+                : 0;
+        }
+    }
+
+    const incorrectArray = Array.from(incorrectlyAnswered);
+    incorrectArray.forEach(questionId => {
+      const question = allQuestions.find(q => q.id === questionId);
+      if (question && stats[question.domain]) {
+        stats[question.domain].incorrectCount += 1;
+      }
+    });
+
+    return Object.entries(stats).map(([domain, data]) => ({ domain, ...data }));
+  }, [availableDomains, allQuestions, domainPerformance, incorrectlyAnswered]);
+
+
+  if (currentMode === 'practice-dashboard') {
+    const totalQuestionsInSelectedDomains = selectedDomains.length === 0
+        ? allQuestions.length
+        : allQuestions.filter(q => selectedDomains.includes(q.domain)).length;
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-800 dark:to-gray-900 p-4">
+        <div className="w-full max-w-screen-2xl mx-auto">
+          <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 dark:border-gray-700/20 p-6 sm:p-8">
+            <div className="flex justify-between items-center mb-8">
+              <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                Practice Dashboard
+              </h1>
+              <div className="flex items-center gap-2 sm:gap-4">
+                <button onClick={handleHomeClick} title="Back to Dashboard" className="p-2 sm:p-3 rounded-full bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">
+                    <Home className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                </button>
+                <button onClick={toggleDarkMode} className="p-2 sm:p-3 rounded-full bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">
+                  {isDarkMode ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-600" />}
+                </button>
+              </div>
+            </div>
+            
+            <div className="space-y-6 mb-8">
+              <div className="space-y-3">
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Knowledge Domain(s)</label>
+                <div className="flex flex-wrap gap-2">
+                  <button 
+                    onClick={() => setSelectedDomains([])}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.length === 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
+                  >
+                    All Domains
+                  </button>
+                  {availableDomains.map(d => (
+                    <button 
+                      key={d} 
+                      onClick={() => handleDomainToggle(d)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-3">
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Number of Questions: {numberOfQuestions}</label>
+                <input type="range" min="1" max={totalQuestionsInSelectedDomains} value={numberOfQuestions} onChange={(e) => setNumberOfQuestions(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer" />
+              </div>
+            </div>
+
+            {/* Stats Table/Cards */}
+            <div>
+                <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 mb-4">Domain Statistics</h3>
+                {/* Desktop Table */}
+                <div className="hidden md:block">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 dark:bg-gray-700/50">
+                            <tr>
+                                <th className="p-3 font-semibold text-gray-700 dark:text-gray-200">Domain</th>
+                                <th className="p-3 font-semibold text-gray-700 dark:text-gray-200">Performance</th>
+                                <th className="p-3 font-semibold text-gray-700 dark:text-gray-200">Attempted</th>
+                                <th className="p-3 font-semibold text-gray-700 dark:text-gray-200">Correct</th>
+                                <th className="p-3 font-semibold text-gray-700 dark:text-gray-200">Incorrect Qs</th>
+                                <th className="p-3 font-semibold text-gray-700 dark:text-gray-200">Total Qs</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {detailedDomainStats.map(stat => (
+                                <tr key={stat.domain} className="border-b dark:border-gray-700">
+                                    <td className="p-3 font-medium text-gray-900 dark:text-gray-100">{stat.domain}</td>
+                                    <td className="p-3 text-gray-700 dark:text-gray-300">{stat.performance}%</td>
+                                    <td className="p-3 text-gray-700 dark:text-gray-300">{stat.attempted}</td>
+                                    <td className="p-3 text-green-600 dark:text-green-400">{stat.correct}</td>
+                                    <td className="p-3 text-red-600 dark:text-red-400">{stat.incorrectCount}</td>
+                                    <td className="p-3 text-gray-700 dark:text-gray-300">{stat.totalQuestions}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+                 {/* Mobile Cards */}
+                 <div className="md:hidden space-y-4">
+                    {detailedDomainStats.map(stat => (
+                        <div key={stat.domain} className="bg-slate-100 dark:bg-gray-700/50 rounded-lg p-4">
+                            <h4 className="font-bold text-gray-900 dark:text-gray-100 mb-2">{stat.domain}</h4>
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                <div><span className="font-semibold">Performance:</span> {stat.performance}%</div>
+                                <div><span className="font-semibold">Attempted:</span> {stat.attempted}</div>
+                                <div className="text-green-600 dark:text-green-400"><span className="font-semibold">Correct:</span> {stat.correct}</div>
+                                <div className="text-red-600 dark:text-red-400"><span className="font-semibold">Incorrect Qs:</span> {stat.incorrectCount}</div>
+                                <div><span className="font-semibold">Total Qs:</span> {stat.totalQuestions}</div>
+                            </div>
+                        </div>
+                    ))}
+                 </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-4 mt-8">
+              <button onClick={() => setCurrentMode('analytics')} className="flex-1 order-2 sm:order-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100 font-semibold py-3 px-6 rounded-xl">
+                Back to Dashboard
+              </button>
+              <button onClick={() => startPracticeMode(null, 'practice')} className="flex-1 order-1 sm:order-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold py-3 px-6 rounded-xl flex items-center justify-center gap-2">
+                <Play className="w-5 h-5" />
+                Start Practice
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+
+  if (currentMode === 'exam-setup' || currentMode === 'assessment-setup') {
     const isExamSetup = currentMode === 'exam-setup';
     const isAssessmentSetup = currentMode === 'assessment-setup';
     let setupContent, startButtonAction, startButtonText;
@@ -658,7 +822,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
           </select>
         </div>
       );
-    } else if (isAssessmentSetup) {
+    } else { // Assessment Setup
       startButtonAction = startAssessmentMode;
       startButtonText = 'Start Assessment';
       setupContent = (
@@ -670,47 +834,6 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
           </select>
         </div>
       );
-    } else {
-      startButtonAction = () => startPracticeMode(null, 'practice');
-      startButtonText = 'Start Practice';
-      const totalQuestionsInSelectedDomains = selectedDomains.length === 0
-        ? allQuestions.length
-        : allQuestions.filter(q => selectedDomains.includes(q.domain)).length;
-
-      setupContent = (
-        <>
-          <div className="flex items-center justify-between p-4 bg-gray-100 dark:bg-gray-700 rounded-xl">
-            <div className="font-semibold text-gray-800 dark:text-gray-200">Adaptive Practice</div>
-            <button onClick={() => setAdaptivePracticeMode(!adaptivePracticeMode)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adaptivePracticeMode ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adaptivePracticeMode ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-          </div>
-          <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Knowledge Domain(s)</label>
-            <div className="flex flex-wrap gap-2">
-              <button 
-                onClick={() => setSelectedDomains([])}
-                className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.length === 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
-              >
-                All Domains
-              </button>
-              {availableDomains.map(d => (
-                <button 
-                  key={d} 
-                  onClick={() => handleDomainToggle(d)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Number of Questions: {numberOfQuestions}</label>
-            <input type="range" min="1" max={totalQuestionsInSelectedDomains} value={numberOfQuestions} onChange={(e) => setNumberOfQuestions(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer" />
-          </div>
-        </>
-      );
     }
 
     return (
@@ -719,7 +842,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
           <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 dark:border-gray-700/20 p-6 sm:p-8">
             <div className="flex justify-between items-center mb-8">
               <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                {isExamSetup ? "Exam Configuration" : isAssessmentSetup ? "Assessment Setup" : "Practice Setup"}
+                {isExamSetup ? "Exam Configuration" : "Assessment Setup"}
               </h1>
               <div className="flex items-center gap-2 sm:gap-4">
                 <button onClick={handleHomeClick} title="Back to Dashboard" className="p-2 sm:p-3 rounded-full bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">
@@ -750,10 +873,11 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     const stats = getOverallStats();
     const domainData = getDomainChartData();
     const progressData = getProgressChartData();
+    const canGeneratePlan = assessmentReport || stats.totalQuestions >= 100;
     
     const ActionButtons = () => (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <button onClick={() => setCurrentMode('setup')} className="group bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg"><BookOpen className="w-5 h-5" /><span className="hidden sm:inline">Practice Mode</span><span className="sm:hidden">Practice</span></button>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <button onClick={() => setCurrentMode('practice-dashboard')} className="group bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg"><BookOpen className="w-5 h-5" /><span className="hidden sm:inline">Practice Mode</span><span className="sm:hidden">Practice</span></button>
         <button onClick={() => setCurrentMode('exam-setup')} className="group bg-gradient-to-r from-red-500 to-red-600 text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg"><Award className="w-5 h-5" /><span className="hidden sm:inline">Exam Mode</span><span className="sm:hidden">Exam</span></button>
         <button onClick={() => startPracticeMode(incorrectToReview, 'practice-incorrect')} disabled={incorrectToReview.length === 0} className="group bg-gradient-to-r from-orange-500 to-orange-600 text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg disabled:from-gray-400 disabled:to-gray-500"><RotateCcw className="w-5 h-5" /><span className="hidden lg:inline">Review Incorrect</span><span className="lg:hidden">Incorrect</span><span className="text-xs bg-white/20 px-1.5 py-0.5 rounded-full">({incorrectToReview.length})</span></button>
         <button onClick={() => startPracticeMode(bookmarkedToReview, 'practice-bookmarked')} disabled={bookmarkedToReview.length === 0} className="group bg-gradient-to-r from-yellow-500 to-amber-500 text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg disabled:from-gray-400 disabled:to-gray-500"><Bookmark className="w-5 h-5" /><span className="hidden lg:inline">Review Bookmarked</span><span className="lg:hidden">Bookmarked</span><span className="text-xs bg-white/20 px-1.5 py-0.5 rounded-full">({bookmarkedToReview.length})</span></button>
@@ -794,43 +918,65 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                 Personalized Study Plan
               </h3>
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                {!assessmentReport && (
-                    <button onClick={() => setCurrentMode('assessment-setup')} className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium shadow-lg whitespace-nowrap">
+                {!assessmentReport && stats.totalQuestions < 100 && (
+                  <button onClick={() => setCurrentMode('assessment-setup')} className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium shadow-lg whitespace-nowrap">
                     <Target className="w-4 h-4" /> Take Assessment
                   </button>
                 )}
                 <input type="date" value={examDate || ""} onChange={(e) => setExamDate(e.target.value)} className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <button onClick={generateStudyPlan} disabled={!assessmentReport} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium shadow-lg whitespace-nowrap disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed">
-                  <Target className="w-4 h-4" /> Generate Plan
-                </button>
+                {studyPlan.length > 0 ? (
+                  <button onClick={generateStudyPlan} className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium shadow-lg whitespace-nowrap">
+                    <RotateCcw className="w-4 h-4" /> Update Plan
+                  </button>
+                ) : (
+                  <button onClick={generateStudyPlan} disabled={!canGeneratePlan} className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-lg flex items-center justify-center gap-2 text-sm font-medium shadow-lg whitespace-nowrap disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed">
+                    <Target className="w-4 h-4" /> Generate Plan
+                  </button>
+                )}
               </div>
             </div>
             {studyPlan.length > 0 ? (
-              <div className="overflow-x-auto rounded-xl max-h-96 overflow-y-auto">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-white/80 dark:bg-gray-800/80 z-10">
-                    <tr className="bg-gray-50/80 dark:bg-gray-700/50 backdrop-blur-sm">
-                      <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tl-lg">Date</th>
-                      <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tr-lg">Tasks</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {studyPlan.map((day, index) => (
-                      <tr key={index} className="border-t border-gray-100 dark:border-gray-600/30">
-                        <td className="p-3 font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">{day.date}</td>
-                        <td className="p-3 text-gray-700 dark:text-gray-300">
-                          <ul className="list-disc pl-5 space-y-1">
-                            {day.tasks.map((task, i) => (<li key={i} className="text-sm">{task}</li>))}
-                          </ul>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="space-y-4 sm:hidden">
+                  {studyPlan.map((day, index) => (
+                    <div key={index} className="bg-slate-100 dark:bg-gray-700/50 rounded-xl shadow p-4">
+                      <p className="font-semibold text-gray-800 dark:text-gray-100 mb-2">{day.date}</p>
+                      <ul className="list-disc pl-5 space-y-1 text-gray-600 dark:text-gray-300 text-sm">
+                        {day.tasks.map((task, i) => <li key={i}>{task}</li>)}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+                <div className="hidden sm:block">
+                  <div className="overflow-x-auto rounded-xl max-h-96 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-white/80 dark:bg-gray-800/80 z-10">
+                        <tr className="bg-gray-50/80 dark:bg-gray-700/50 backdrop-blur-sm">
+                          <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tl-lg">Date</th>
+                          <th className="p-3 text-left font-semibold text-gray-700 dark:text-gray-200 rounded-tr-lg">Tasks</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {studyPlan.map((day, index) => (
+                          <tr key={index} className="border-t border-gray-100 dark:border-gray-600/30">
+                            <td className="p-3 font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">{day.date}</td>
+                            <td className="p-3 text-gray-700 dark:text-gray-300">
+                              <ul className="list-disc pl-5 space-y-1">
+                                {day.tasks.map((task, i) => (<li key={i} className="text-sm">{task}</li>))}
+                              </ul>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
             ) : (
               <p className="text-gray-600 dark:text-gray-400 text-center py-4">
-                {assessmentReport ? "Set your exam date and click 'Generate Plan'." : "Take the assessment test to unlock the study plan."}
+                {canGeneratePlan 
+                    ? "Set your exam date and click 'Generate Plan' to create your personalized study schedule." 
+                    : `Please take the assessment or answer ${100 - stats.totalQuestions} more questions to unlock the study plan generator.`}
               </p>
             )}
           </div>
@@ -941,9 +1087,24 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
             </>
           )}
         </div>
-        <div className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl border-t border-white/20 dark:border-gray-700/20 p-4 lg:hidden">
-          <div className="w-full max-w-screen-2xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <ActionButtons />
+        <div className="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-gray-800/90 border-t border-gray-200 dark:border-gray-700 p-2 shadow-lg block lg:hidden">
+          <div className="flex justify-around">
+            <button onClick={() => setCurrentMode('practice-dashboard')} className="flex flex-col items-center text-xs text-gray-700 dark:text-gray-300">
+              <BookOpen className="w-6 h-6 mb-1" />
+              Practice
+            </button>
+            <button onClick={() => setCurrentMode('exam-setup')} className="flex flex-col items-center text-xs text-gray-700 dark:text-gray-300">
+              <Award className="w-6 h-6 mb-1" />
+              Exam
+            </button>
+            <button onClick={() => startPracticeMode(incorrectToReview, 'practice-incorrect')} className="flex flex-col items-center text-xs text-gray-700 dark:text-gray-300">
+              <RotateCcw className="w-6 h-6 mb-1" />
+              Incorrect
+            </button>
+            <button onClick={() => startPracticeMode(bookmarkedToReview, 'practice-bookmarked')} className="flex flex-col items-center text-xs text-gray-700 dark:text-gray-300">
+              <Bookmark className="w-6 h-6 mb-1" />
+              Saved
+            </button>
           </div>
         </div>
       </div>
@@ -1146,7 +1307,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                 <Home className="w-5 h-5" />
                 Dashboard
               </button>
-              <button onClick={() => setCurrentMode('setup')} className="flex-1 bg-green-500 text-white font-semibold py-4 px-6 rounded-xl flex items-center justify-center gap-2">
+              <button onClick={() => setCurrentMode('practice-dashboard')} className="flex-1 bg-green-500 text-white font-semibold py-4 px-6 rounded-xl flex items-center justify-center gap-2">
                 <RotateCcw className="w-5 h-5" />
                 Practice Again
               </button>
@@ -1180,7 +1341,6 @@ const App = () => {
           const docSnap = await getDoc(userDocRef);
           const defaultProgress = {
             sessionHistory: [],
-            domainPerformance: {},
             questionPerformance: {},
             bookmarkedQuestions: new Set(),
             incorrectlyAnswered: new Set(),
@@ -1208,7 +1368,6 @@ const App = () => {
           console.error("Error loading/creating user progress:", error);
           setInitialProgress({
             sessionHistory: [],
-            domainPerformance: {},
             questionPerformance: {},
             bookmarkedQuestions: new Set(),
             incorrectlyAnswered: new Set(),
@@ -1240,3 +1399,5 @@ const App = () => {
 };
 
 export default App;
+" I need to reformat the practice screen to include a table for domain, with total questions per domain, answered questions, answered correctly from the first time, incorrect questions, number of the practicied sessions, etc
+
