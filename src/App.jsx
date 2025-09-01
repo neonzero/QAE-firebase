@@ -1399,5 +1399,3 @@ const App = () => {
 };
 
 export default App;
-" I need to reformat the practice screen to include a table for domain, with total questions per domain, answered questions, answered correctly from the first time, incorrect questions, number of the practicied sessions, etc
-
