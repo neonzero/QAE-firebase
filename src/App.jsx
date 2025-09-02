@@ -251,6 +251,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   const [inviteeEmail, setInviteeEmail] = useState('');
   const [generatedCode, setGeneratedCode] = useState('');
   const [inviteMessage, setInviteMessage] = useState('');
+  const [practiceFilter, setPracticeFilter] = useState('all'); // 'all', 'new', 'incorrect'
 
   const CISA_DOMAIN_WEIGHTS = {
     "INFORMATION SYSTEM AUDITING PROCESS": 0.18,
@@ -400,16 +401,28 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   const startPracticeMode = (practiceQuestions, mode = 'practice') => {
     let questionsToSet;
     if (mode === 'practice') {
-      let filtered = (selectedDomains.length === 0)
-        ? [...allQuestions]
-        : allQuestions.filter(q => selectedDomains.includes(q.domain));
+      let questionPool = [...allQuestions];
       
-      questionsToSet = filtered.sort(() => 0.5 - Math.random()).slice(0, numberOfQuestions);
+      // Apply Question Type Filter
+      const seenQuestionIds = new Set(Object.keys(questionPerformance));
+      if (practiceFilter === 'new') {
+        questionPool = allQuestions.filter(q => !seenQuestionIds.has(q.id.toString()));
+      } else if (practiceFilter === 'incorrect') {
+        const incorrectIds = new Set(Array.from(incorrectlyAnswered));
+        questionPool = allQuestions.filter(q => incorrectIds.has(q.id));
+      }
+
+      // Apply Domain Filter
+      let filteredByDomain = (selectedDomains.length === 0)
+        ? questionPool
+        : questionPool.filter(q => selectedDomains.includes(q.domain));
+      
+      questionsToSet = filteredByDomain.sort(() => 0.5 - Math.random()).slice(0, numberOfQuestions);
     } else {
       questionsToSet = practiceQuestions;
     }
     if (!questionsToSet || questionsToSet.length === 0) {
-      alert("No questions available for the selected domains.");
+      alert("No questions available for the selected filters.");
       return;
     }
     setQuestions(questionsToSet);
@@ -515,9 +528,11 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
 
   const handleAnswerSelect = (questionId, answerIndex) => {
     setSelectedAnswers(prev => ({ ...prev, [questionId]: answerIndex }));
+    const currentQ = questions[currentQuestion];
+    const isCorrect = currentQ.correctAnswer === answerIndex;
+
+    // Update performance for any practice mode
     if (currentMode.startsWith('practice')) {
-      const currentQ = questions[currentQuestion];
-      const isCorrect = currentQ.correctAnswer === answerIndex;
       setQuestionPerformance(prev => {
         const updated = { ...prev };
         const qStats = updated[questionId] || { correctCount: 0, totalCount: 0 };
@@ -526,7 +541,20 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
         updated[questionId] = qStats;
         return updated;
       });
-      if (!isCorrect) setIncorrectlyAnswered(prev => new Set(prev).add(questionId));
+    }
+
+    if (isCorrect) {
+      // If answered correctly, remove from incorrect list
+      setIncorrectlyAnswered(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(questionId);
+        return newSet;
+      });
+    } else {
+      // If answered incorrectly in any mode, add to incorrect list
+       if (currentMode.startsWith('practice')) {
+         setIncorrectlyAnswered(prev => new Set(prev).add(questionId));
+       }
     }
   };
 
@@ -714,30 +742,56 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
               </div>
             </div>
             
-            <div className="space-y-6 mb-8">
-              <div className="space-y-3">
-                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Knowledge Domain(s)</label>
-                <div className="flex flex-wrap gap-2">
-                  <button 
-                    onClick={() => setSelectedDomains([])}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.length === 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
-                  >
-                    All Domains
-                  </button>
-                  {availableDomains.map(d => (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Question Filter</label>
+                  <div className="flex flex-wrap gap-2">
+                    {['all', 'new', 'incorrect'].map(filter => (
+                      <button 
+                        key={filter}
+                        onClick={() => setPracticeFilter(filter)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-full capitalize ${practiceFilter === filter ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
+                      >
+                        {filter} Questions
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Knowledge Domain(s)</label>
+                  <div className="flex flex-wrap gap-2">
                     <button 
-                      key={d} 
-                      onClick={() => handleDomainToggle(d)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
+                      onClick={() => setSelectedDomains([])}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.length === 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
                     >
-                      {d}
+                      All Domains
                     </button>
-                  ))}
+                    {availableDomains.map(d => (
+                      <button 
+                        key={d} 
+                        onClick={() => handleDomainToggle(d)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-full ${selectedDomains.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="space-y-3">
-                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Number of Questions: {numberOfQuestions}</label>
-                <input type="range" min="1" max={totalQuestionsInSelectedDomains} value={numberOfQuestions} onChange={(e) => setNumberOfQuestions(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer" />
+
+              <div className="space-y-6">
+                <div className="flex items-center justify-between p-4 bg-gray-100 dark:bg-gray-700 rounded-xl">
+                  <div className="font-semibold text-gray-800 dark:text-gray-200">Adaptive Practice Mode</div>
+                  <button onClick={() => setAdaptivePracticeMode(!adaptivePracticeMode)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adaptivePracticeMode ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adaptivePracticeMode ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">Number of Questions: {numberOfQuestions}</label>
+                  <input type="range" min="1" max={totalQuestionsInSelectedDomains} value={numberOfQuestions} onChange={(e) => setNumberOfQuestions(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer" />
+                </div>
               </div>
             </div>
 
