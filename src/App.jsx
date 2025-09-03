@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 // Firebase Imports
 import { initializeApp } from "firebase/app";
@@ -6,7 +6,7 @@ import { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword, s
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, getDocs, updateDoc } from "firebase/firestore";
 
 // Icon Imports
-import { Clock, BookOpen, Award, Play, RotateCcw, CheckCircle, XCircle, AlertCircle, BarChart3, Home, Download, Bookmark, Moon, Sun, ChevronLeft, ChevronRight, Calendar, Target, LogOut } from 'lucide-react';
+import { Clock, BookOpen, Award, Play, RotateCcw, CheckCircle, XCircle, AlertCircle, BarChart3, Home, Download, Bookmark, Moon, Sun, ChevronLeft, ChevronRight, Calendar, Target, LogOut, Flame, Star } from 'lucide-react';
 
 // Charting Library Imports
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -72,7 +72,6 @@ const Login = () => {
     
     try {
       if (isSignUp) {
-        // --- INVITATION CHECK LOGIC ---
         const invitationsRef = collection(db, "invitations");
         const q = query(invitationsRef, 
           where("code", "==", invitationCode.toUpperCase()), 
@@ -88,10 +87,8 @@ const Login = () => {
           return;
         }
         
-        // --- If code is valid, proceed ---
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         
-        // Mark the invitation as used
         const invitationDoc = querySnapshot.docs[0];
         const invitationDocRef = doc(db, "invitations", invitationDoc.id);
         await updateDoc(invitationDocRef, {
@@ -100,28 +97,29 @@ const Login = () => {
           usedBy: userCredential.user.uid
         });
 
-        // Create initial user document in Firestore
         const defaultProgress = {
           sessionHistory: [],
           questionPerformance: {},
-          bookmarked: [], // Store as array for Firestore
-          incorrect: [], // Store as array for Firestore
+          bookmarked: [],
+          incorrect: [],
           examDate: null,
           studyPlan: [],
           isDarkMode: false,
           createdAt: new Date().toISOString(),
           email: userCredential.user.email,
-          assessmentReport: null
+          assessmentReport: null,
+          xp: 0,
+          level: 1,
+          dailyStreak: 0,
+          lastPracticeDate: null
         };
         
         const userDocRef = doc(db, "users", userCredential.user.uid);
         await setDoc(userDocRef, defaultProgress);
-        console.log("User document created successfully");
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (err) {
-      console.error("Authentication error:", err);
       setError(err.message.replace('Firebase: ', ''));
     }
     setLoading(false);
@@ -252,6 +250,13 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   const [generatedCode, setGeneratedCode] = useState('');
   const [inviteMessage, setInviteMessage] = useState('');
   const [practiceFilter, setPracticeFilter] = useState('all'); // 'all', 'new', 'incorrect'
+  const [currentDifficulty, setCurrentDifficulty] = useState(2);
+  const adaptiveSessionData = useRef({ askedIds: new Set(), domainCounts: {}, questionPool: [] });
+  const [activePlanTask, setActivePlanTask] = useState(null);
+  // Gamification State
+  const [xp, setXp] = useState(initialProgress.xp || 0);
+  const [dailyStreak, setDailyStreak] = useState(initialProgress.dailyStreak || 0);
+  const [lastPracticeDate, setLastPracticeDate] = useState(initialProgress.lastPracticeDate || null);
 
   const CISA_DOMAIN_WEIGHTS = {
     "INFORMATION SYSTEM AUDITING PROCESS": 0.18,
@@ -287,19 +292,32 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     return performance;
   }, [sessionHistory]);
   
+  // --- Gamification Logic ---
+  const LEVEL_TITLES = [
+    'Audit Novice', 'IT Apprentice', 'Governance Guru', 'Security Specialist', 
+    'CISA Candidate', 'Risk Manager', 'Compliance Expert', 'Senior Auditor', 
+    'Audit Principal', 'Certified Pro'
+  ];
+
+  const calculateLevel = (currentXp) => {
+    const level = Math.floor(Math.sqrt(currentXp / 100)) + 1;
+    const currentLevelXp = ((level - 1) ** 2) * 100;
+    const nextLevelXp = (level ** 2) * 100;
+    const xpIntoLevel = currentXp - currentLevelXp;
+    const xpForNextLevel = nextLevelXp - currentLevelXp;
+    const title = LEVEL_TITLES[Math.min(level - 1, LEVEL_TITLES.length - 1)];
+    return { level, title, xpIntoLevel, xpForNextLevel };
+  };
+
+  const { level, title, xpIntoLevel, xpForNextLevel } = useMemo(() => calculateLevel(xp), [xp]);
+
   useEffect(() => {
     const saveProgressToFirestore = async () => {
       if (!user) return;
       try {
         const progressData = convertSetsToArrays({
-          sessionHistory,
-          questionPerformance,
-          bookmarkedQuestions,
-          incorrectlyAnswered,
-          examDate,
-          studyPlan,
-          isDarkMode,
-          assessmentReport,
+          sessionHistory, questionPerformance, bookmarkedQuestions, incorrectlyAnswered,
+          examDate, studyPlan, isDarkMode, assessmentReport, xp, dailyStreak, lastPracticeDate,
           lastUpdated: new Date().toISOString()
         });
         const userDocRef = doc(db, "users", user.uid);
@@ -310,7 +328,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     };
     const handler = setTimeout(saveProgressToFirestore, 2000);
     return () => clearTimeout(handler);
-  }, [sessionHistory, questionPerformance, bookmarkedQuestions, incorrectlyAnswered, examDate, studyPlan, isDarkMode, user, assessmentReport]);
+  }, [sessionHistory, questionPerformance, bookmarkedQuestions, incorrectlyAnswered, examDate, studyPlan, isDarkMode, user, assessmentReport, xp, dailyStreak, lastPracticeDate]);
 
   const handleLogout = async () => {
     try {
@@ -324,6 +342,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     const activeModes = ['practice', 'exam', 'assessment', 'practice-incorrect', 'practice-bookmarked'];
     if (activeModes.includes(currentMode)) {
       if (window.confirm('Are you sure? Your current session will not be saved.')) {
+        setActivePlanTask(null);
         setCurrentMode('analytics');
       }
     } else {
@@ -398,21 +417,73 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     setSessionStartTime(Date.now());
   };
 
+  const findNextAdaptiveQuestion = (targetDifficulty) => {
+    const relevantDomains = selectedDomains.length > 0 ? selectedDomains : availableDomains;
+    
+    const domainDeficits = relevantDomains.map(domain => {
+      const targetCount = numberOfQuestions * (CISA_DOMAIN_WEIGHTS[domain] || 1 / relevantDomains.length);
+      const currentCount = adaptiveSessionData.current.domainCounts[domain] || 0;
+      return { domain, deficit: targetCount - currentCount };
+    });
+    domainDeficits.sort((a, b) => b.deficit - a.deficit);
+    
+    for (const { domain: targetDomain } of domainDeficits) {
+      let questionPool = adaptiveSessionData.current.questionPool.filter(q => 
+        q.domain === targetDomain && 
+        !adaptiveSessionData.current.askedIds.has(q.id)
+      );
+
+      for (let offset = 0; offset <= 5; offset++) {
+        const difficultiesToTry = [...new Set([targetDifficulty + offset, targetDifficulty - offset])].filter(d => d >= 1 && d <= 5);
+        for (const difficulty of difficultiesToTry) {
+          let potentialQuestions = questionPool.filter(q => q.difficulty === difficulty);
+          if (potentialQuestions.length > 0) {
+            return potentialQuestions[Math.floor(Math.random() * potentialQuestions.length)];
+          }
+        }
+      }
+    }
+    
+    let fallbackPool = adaptiveSessionData.current.questionPool.filter(q => !adaptiveSessionData.current.askedIds.has(q.id));
+    return fallbackPool.length > 0 ? fallbackPool[Math.floor(Math.random() * fallbackPool.length)] : null;
+  };
+
   const startPracticeMode = (practiceQuestions, mode = 'practice') => {
+    let questionPool = [...allQuestions];
+    const seenQuestionIds = new Set(Object.keys(questionPerformance));
+    if (practiceFilter === 'new') {
+      questionPool = allQuestions.filter(q => !seenQuestionIds.has(q.id.toString()));
+    } else if (practiceFilter === 'incorrect') {
+      const incorrectIds = new Set(Array.from(incorrectlyAnswered));
+      questionPool = allQuestions.filter(q => incorrectIds.has(q.id));
+    }
+
+    if (mode === 'practice' && adaptivePracticeMode) {
+      resetSession();
+      setCurrentMode('practice');
+      setCurrentDifficulty(2);
+      
+      adaptiveSessionData.current = { 
+        askedIds: new Set(), 
+        domainCounts: {},
+        questionPool: questionPool
+      };
+      availableDomains.forEach(d => { adaptiveSessionData.current.domainCounts[d] = 0; });
+
+      const firstQuestion = findNextAdaptiveQuestion(2);
+      if (firstQuestion) {
+        setQuestions([firstQuestion]);
+        adaptiveSessionData.current.askedIds.add(firstQuestion.id);
+        adaptiveSessionData.current.domainCounts[firstQuestion.domain] = 1;
+      } else {
+        alert("No questions available for the selected filters.");
+        setCurrentMode('analytics');
+      }
+      return;
+    }
+
     let questionsToSet;
     if (mode === 'practice') {
-      let questionPool = [...allQuestions];
-      
-      // Apply Question Type Filter
-      const seenQuestionIds = new Set(Object.keys(questionPerformance));
-      if (practiceFilter === 'new') {
-        questionPool = allQuestions.filter(q => !seenQuestionIds.has(q.id.toString()));
-      } else if (practiceFilter === 'incorrect') {
-        const incorrectIds = new Set(Array.from(incorrectlyAnswered));
-        questionPool = allQuestions.filter(q => incorrectIds.has(q.id));
-      }
-
-      // Apply Domain Filter
       let filteredByDomain = (selectedDomains.length === 0)
         ? questionPool
         : questionPool.filter(q => selectedDomains.includes(q.domain));
@@ -511,12 +582,46 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       questionIds: questions.map(q => q.id),
       selectedAnswers: { ...selectedAnswers },
     };
+    
     setSessionHistory(prev => [sessionData, ...prev]);
+
+    const today = new Date().toISOString().split('T')[0];
+    if (lastPracticeDate !== today) {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayString = yesterday.toISOString().split('T')[0];
+        if (lastPracticeDate === yesterdayString) {
+            setDailyStreak(prev => prev + 1);
+        } else {
+            setDailyStreak(1);
+        }
+        setLastPracticeDate(today);
+    }
+    
+    setXp(prev => prev + 50);
+
     return sessionData;
   };
 
   const handleSubmit = () => {
     const results = recordSession();
+    
+    if(activePlanTask) {
+        setStudyPlan(prevPlan => {
+            const newPlan = [...prevPlan];
+            const dayIndex = newPlan.findIndex(d => d.date === activePlanTask.date);
+            if(dayIndex > -1) {
+                const taskIndex = newPlan[dayIndex].tasks.findIndex(t => t.id === activePlanTask.taskId);
+                if(taskIndex > -1) {
+                    newPlan[dayIndex].tasks[taskIndex].status = 'completed';
+                    newPlan[dayIndex].tasks[taskIndex].score = results.percentage;
+                }
+            }
+            return newPlan;
+        });
+        setActivePlanTask(null);
+    }
+
     if (currentMode === 'assessment') {
       setAssessmentReport(results);
       setCurrentMode('assessment-report');
@@ -528,30 +633,31 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
 
   const handleAnswerSelect = (questionId, answerIndex) => {
     setSelectedAnswers(prev => ({ ...prev, [questionId]: answerIndex }));
-    const currentQ = questions[currentQuestion];
+    const currentQ = questions.find(q => q.id === questionId);
+    if (!currentQ) return;
     const isCorrect = currentQ.correctAnswer === answerIndex;
 
-    // Update performance for any practice mode
-    if (currentMode.startsWith('practice')) {
-      setQuestionPerformance(prev => {
-        const updated = { ...prev };
-        const qStats = updated[questionId] || { correctCount: 0, totalCount: 0 };
-        qStats.totalCount += 1;
-        if (isCorrect) qStats.correctCount += 1;
-        updated[questionId] = qStats;
-        return updated;
-      });
-    }
+    const qStats = questionPerformance[questionId] || { correctCount: 0, totalCount: 0 };
+    const firstTry = qStats.totalCount === 0;
+
+    setQuestionPerformance(prev => {
+      const updated = { ...prev };
+      updated[questionId] = { ...qStats, totalCount: qStats.totalCount + 1 };
+      if (isCorrect) updated[questionId].correctCount += 1;
+      return updated;
+    });
 
     if (isCorrect) {
-      // If answered correctly, remove from incorrect list
+      let earnedXp = 10 + currentQ.difficulty; // Base + Difficulty
+      if (firstTry) earnedXp += 5; // First Try Bonus
+      setXp(prev => prev + earnedXp);
+
       setIncorrectlyAnswered(prev => {
         const newSet = new Set(prev);
         newSet.delete(questionId);
         return newSet;
       });
     } else {
-      // If answered incorrectly in any mode, add to incorrect list
        if (currentMode.startsWith('practice')) {
          setIncorrectlyAnswered(prev => new Set(prev).add(questionId));
        }
@@ -559,10 +665,31 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
   };
 
   const handleNextQuestion = () => {
-    if (currentQuestion < questions.length - 1) {
-      setCurrentQuestion(currentQuestion + 1);
+    if (adaptivePracticeMode && currentMode === 'practice') {
+      if (questions.length >= numberOfQuestions) {
+        handleSubmit();
+        return;
+      }
+      const currentQ = questions[currentQuestion];
+      const wasCorrect = selectedAnswers[currentQ.id] === currentQ.correctAnswer;
+      const nextDifficulty = wasCorrect ? Math.min(5, currentDifficulty + 1) : Math.max(1, currentDifficulty - 1);
+      setCurrentDifficulty(nextDifficulty);
+
+      const nextQuestion = findNextAdaptiveQuestion(nextDifficulty);
+      if (nextQuestion) {
+        setQuestions(prev => [...prev, nextQuestion]);
+        adaptiveSessionData.current.askedIds.add(nextQuestion.id);
+        adaptiveSessionData.current.domainCounts[nextQuestion.domain]++;
+        setCurrentQuestion(prev => prev + 1);
+      } else {
+        handleSubmit();
+      }
     } else {
-      handleSubmit();
+      if (currentQuestion < questions.length - 1) {
+        setCurrentQuestion(currentQuestion + 1);
+      } else {
+        handleSubmit();
+      }
     }
   };
   
@@ -614,18 +741,23 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       return;
     }
 
-    const totalQuestions = sessionHistory.reduce((sum, s) => sum + s.totalQuestions, 0);
-    const canGenerate = assessmentReport || totalQuestions >= 100;
+    const totalQuestionsAnswered = sessionHistory.reduce((sum, s) => sum + s.totalQuestions, 0);
+    const canGenerate = assessmentReport || totalQuestionsAnswered >= 100;
 
     if (!canGenerate) {
-      alert(`Please complete the initial assessment or answer at least ${100 - totalQuestions} more questions to generate a study plan.`);
+      alert(`Please complete the initial assessment or answer at least ${100 - totalQuestionsAnswered} more questions to generate a study plan.`);
       return;
     }
 
-    const performanceSource = assessmentReport && totalQuestions < 100 ? assessmentReport.domainBreakdown : domainPerformance;
+    const performanceSource = assessmentReport && totalQuestionsAnswered < 100 ? assessmentReport.domainBreakdown : domainPerformance;
 
     const examDateObj = new Date(examDate);
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayString = today.toISOString().split('T')[0];
+
+    const preservedPlan = studyPlan.filter(day => day.date < todayString);
+
     const daysUntilExam = Math.ceil((examDateObj.getTime() - today.getTime()) / (1000 * 3600 * 24));
     
     if (daysUntilExam <= 0) {
@@ -646,25 +778,29 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       const date = new Date();
       date.setDate(today.getDate() + i);
       const dateString = date.toISOString().split('T')[0];
-      let tasks = [];
+      let dayTasks = [];
+      
+      const addTask = (text, type, params = {}) => {
+        dayTasks.push({ id: `${dateString}-${dayTasks.length}`, text, type, params, status: 'pending', score: null });
+      };
+
       if (i % 7 === 6) {
-        tasks.push("Take a practice exam (50-100 questions)");
+        addTask("Take a practice exam (50-100 questions)", 'EXAM', { count: 50 });
       } else if (i % 5 === 4) {
-        tasks.push("Review incorrect answers and explanations", "Focus on bookmarked questions");
-        if (weakDomains.length > 0) tasks.push(`Target weak domains: ${weakDomains.join(', ')}`);
+        addTask("Review incorrect answers", 'REVIEW_INCORRECT');
+        addTask("Focus on bookmarked questions", 'REVIEW_BOOKMARKED');
+        if (weakDomains.length > 0) addTask(`Target weak domains: ${weakDomains.join(', ')}`, 'PRACTICE_WEAK', { domains: weakDomains, count: 20 });
       } else {
-        tasks.push(`Practice ${avgQuestionsPerDay} questions`);
+        addTask(`Practice ${avgQuestionsPerDay} questions`, 'PRACTICE_MIXED', { count: avgQuestionsPerDay, domains: [] });
         if (weakDomains.length > 0 && i % 2 === 0) {
-            tasks.push(`Focus on weak domains: ${weakDomains.join(', ')}`);
+            addTask(`Focus on weak domains`, 'PRACTICE_WEAK', { domains: weakDomains, count: Math.round(avgQuestionsPerDay / 2) });
         } else if (strongDomains.length > 0 && i % 3 === 0) {
-             tasks.push(`Quick review of strong domains: ${strongDomains.join(', ')}`);
-        } else {
-            tasks.push("Mixed domain practice");
+             addTask(`Quick review of strong domains`, 'PRACTICE_STRONG', { domains: strongDomains, count: Math.round(avgQuestionsPerDay / 2) });
         }
       }
-      newPlan.push({ date: dateString, tasks });
+      newPlan.push({ date: dateString, tasks: dayTasks });
     }
-    setStudyPlan(newPlan);
+    setStudyPlan([...preservedPlan, ...newPlan]);
     alert(`Study plan has been ${studyPlan.length > 0 ? 'updated' : 'generated'}!`);
   };
 
@@ -679,6 +815,43 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
       return Array.from(newSelected);
     });
   };
+
+  const startSessionFromPlan = (task) => {
+      setActivePlanTask({ date: task.id.split('-')[0], taskId: task.id });
+      let sessionMode, sessionQuestions;
+      const params = task.params || {};
+
+      switch (task.type) {
+        case 'PRACTICE_MIXED':
+        case 'PRACTICE_WEAK':
+        case 'PRACTICE_STRONG':
+          setSelectedDomains(params.domains || []);
+          setNumberOfQuestions(params.count || 20);
+          setPracticeFilter('all');
+          setAdaptivePracticeMode(false);
+          setCurrentMode('practice-dashboard');
+          return;
+        case 'REVIEW_INCORRECT':
+          sessionQuestions = incorrectToReview;
+          sessionMode = 'practice-incorrect';
+          break;
+        case 'REVIEW_BOOKMARKED':
+          sessionQuestions = bookmarkedToReview;
+          sessionMode = 'practice-bookmarked';
+          break;
+        case 'EXAM':
+          setExamQuestionCount(params.count || 50);
+          setCurrentMode('exam-setup');
+          return;
+        default:
+          return;
+      }
+      
+      setQuestions(sessionQuestions);
+      setCurrentMode(sessionMode);
+      resetSession();
+  };
+
 
   // --- Rendering Logic ---
   const incorrectToReview = allQuestions.filter(q => incorrectlyAnswered.has(q.id));
@@ -992,14 +1165,33 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
             {studyPlan.length > 0 ? (
               <>
                 <div className="space-y-4 sm:hidden">
-                  {studyPlan.map((day, index) => (
-                    <div key={index} className="bg-slate-100 dark:bg-gray-700/50 rounded-xl shadow p-4">
-                      <p className="font-semibold text-gray-800 dark:text-gray-100 mb-2">{day.date}</p>
-                      <ul className="list-disc pl-5 space-y-1 text-gray-600 dark:text-gray-300 text-sm">
-                        {day.tasks.map((task, i) => <li key={i}>{task}</li>)}
-                      </ul>
-                    </div>
-                  ))}
+                  {studyPlan.map((day, index) => {
+                     const isToday = new Date().toISOString().split('T')[0] === day.date;
+                     return (
+                        <div key={index} className={`rounded-xl shadow p-4 ${isToday ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-slate-100 dark:bg-gray-700/50'}`}>
+                          <div className="flex justify-between items-center mb-2">
+                             <p className="font-semibold text-gray-800 dark:text-gray-100">{day.date}</p>
+                             {isToday && <span className="text-xs font-bold text-blue-600 bg-blue-200 px-2 py-1 rounded-full">TODAY</span>}
+                          </div>
+                          <div className="space-y-2">
+                            {day.tasks.map(task => (
+                              <button 
+                                key={task.id} 
+                                onClick={() => startSessionFromPlan(task)}
+                                disabled={task.status === 'completed'}
+                                className="w-full text-left p-2 rounded-md bg-white dark:bg-gray-800 disabled:opacity-60"
+                              >
+                                <div className="flex items-center gap-2">
+                                  {task.status === 'completed' ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Play className="w-4 h-4 text-blue-500"/>}
+                                  <span className="flex-grow text-sm">{task.text}</span>
+                                  {task.score !== null && <span className="text-xs font-semibold">{task.score}%</span>}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                     )
+                  })}
                 </div>
                 <div className="hidden sm:block">
                   <div className="overflow-x-auto rounded-xl max-h-96 overflow-y-auto">
@@ -1011,16 +1203,33 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                         </tr>
                       </thead>
                       <tbody>
-                        {studyPlan.map((day, index) => (
-                          <tr key={index} className="border-t border-gray-100 dark:border-gray-600/30">
-                            <td className="p-3 font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">{day.date}</td>
-                            <td className="p-3 text-gray-700 dark:text-gray-300">
-                              <ul className="list-disc pl-5 space-y-1">
-                                {day.tasks.map((task, i) => (<li key={i} className="text-sm">{task}</li>))}
-                              </ul>
-                            </td>
-                          </tr>
-                        ))}
+                        {studyPlan.map((day) => {
+                           const isToday = new Date().toISOString().split('T')[0] === day.date;
+                           return (
+                              <tr key={day.date} className={`border-t border-gray-100 dark:border-gray-600/30 ${isToday ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}>
+                                <td className="p-3 font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">
+                                    {day.date}
+                                    {isToday && <span className="ml-2 text-xs font-bold text-blue-600 bg-blue-200 px-2 py-1 rounded-full">TODAY</span>}
+                                </td>
+                                <td className="p-3 text-gray-700 dark:text-gray-300">
+                                  <div className="space-y-2">
+                                    {day.tasks.map(task => (
+                                      <button 
+                                        key={task.id}
+                                        onClick={() => startSessionFromPlan(task)}
+                                        disabled={task.status === 'completed'}
+                                        className="w-full flex items-center gap-2 text-left p-2 rounded-md bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-60"
+                                      >
+                                        {task.status === 'completed' ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Play className="w-4 h-4 text-blue-500"/>}
+                                        <span className="flex-grow text-sm">{task.text}</span>
+                                        {task.score !== null && <span className="text-xs font-semibold">{task.score}%</span>}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </td>
+                              </tr>
+                           )
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1036,7 +1245,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
           </div>
           {sessionHistory.length > 0 && (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 text-center">
                   <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center mx-auto mb-4"><BarChart3 className="w-6 h-6 text-white" /></div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Average Score</p>
@@ -1052,7 +1261,35 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Questions Answered</p>
                   <p className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-violet-600 bg-clip-text text-transparent">{stats.totalQuestions}</p>
                 </div>
+                <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 text-center">
+                  <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-red-500 rounded-xl flex items-center justify-center mx-auto mb-4"><Flame className="w-6 h-6 text-white" /></div>
+                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Daily Streak</p>
+                  <p className="text-3xl font-bold bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">{dailyStreak}</p>
+                </div>
               </div>
+
+              <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 mb-8">
+                  <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 mb-4">Level & Progress</h3>
+                  <div className="flex items-center gap-4">
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Level</p>
+                      <p className="text-3xl font-bold text-blue-600">{level}</p>
+                    </div>
+                    <div className="flex-grow">
+                      <div className="flex justify-between items-center mb-1 text-sm">
+                        <p className="font-semibold text-blue-700 dark:text-blue-300">{title}</p>
+                        <p className="text-gray-500 dark:text-gray-400">{xpIntoLevel} / {xpForNextLevel} XP</p>
+                      </div>
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
+                        <div 
+                          className="bg-blue-500 h-4 rounded-full" 
+                          style={{ width: `${(xpIntoLevel / xpForNextLevel) * 100}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+              </div>
+
               <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 mb-8">
                 <h3 className="font-bold text-lg mb-4 text-gray-800 dark:text-gray-100">Invite a New User</h3>
                 <form onSubmit={handleGenerateInvite} className="flex flex-col sm:flex-row gap-4">
@@ -1173,6 +1410,8 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
     const isPracticeMode = currentMode.startsWith('practice');
     const selectedAnswer = selectedAnswers[currentQ.id];
     const showExplanation = isPracticeMode && selectedAnswer !== undefined;
+    const totalSessionQuestions = adaptivePracticeMode && currentMode === 'practice' ? numberOfQuestions : questions.length;
+
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-800 dark:to-gray-900 p-4">
@@ -1185,7 +1424,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                   {isExamMode ? 'CISA Exam Mode' : 'Practice Session'}
                 </h1>
                 <p className="text-gray-600 dark:text-gray-300">
-                  Question {currentQuestion + 1} of {questions.length} • {currentQ.domain}
+                  Question {currentQuestion + 1} of {totalSessionQuestions} • {currentQ.domain}
                 </p>
               </div>
               <div className="flex items-center gap-4">
@@ -1273,7 +1512,7 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
                 <ChevronLeft className="w-4 h-4" />
                 Previous
               </button>
-              <button onClick={handleNextQuestion} className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg">
+              <button onClick={handleNextQuestion} disabled={adaptivePracticeMode && selectedAnswers[currentQ.id] === undefined} className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg disabled:opacity-50">
                 {currentQuestion === questions.length - 1 ? 'Finish' : 'Next'}
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -1303,6 +1542,14 @@ const CISAPracticeApp = ({ user, initialProgress }) => {
               const selectedAnswerIndex = sessionToReview.selectedAnswers[q.id];
               return (
                 <div key={q.id} className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/20 p-6">
+                   <div className="flex items-center gap-2 mb-4">
+                      <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Difficulty:</span>
+                      <div className="flex gap-1">
+                        {[1, 2, 3, 4, 5].map(level => (
+                          <div key={level} className={`w-2 h-2 rounded-full ${level <= q.difficulty ? 'bg-orange-400' : 'bg-gray-200 dark:bg-gray-600'}`} />
+                        ))}
+                      </div>
+                    </div>
                   <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
                     Question {index + 1}: {q.question}
                   </h2>
@@ -1401,7 +1648,10 @@ const App = () => {
             examDate: null,
             studyPlan: [],
             isDarkMode: false,
-            assessmentReport: null
+            assessmentReport: null,
+            xp: 0,
+            dailyStreak: 0,
+            lastPracticeDate: null
           };
           if (docSnap.exists()) {
             const data = docSnap.data();
@@ -1409,7 +1659,6 @@ const App = () => {
             setInitialProgress({
               ...defaultProgress,
               ...convertedData,
-              assessmentReport: data.assessmentReport || null,
             });
           } else {
             const firestoreData = convertSetsToArrays(defaultProgress);
@@ -1428,7 +1677,10 @@ const App = () => {
             examDate: null,
             studyPlan: [],
             isDarkMode: false,
-            assessmentReport: null
+            assessmentReport: null,
+            xp: 0,
+            dailyStreak: 0,
+            lastPracticeDate: null
           });
         }
         setUser(currentUser);
@@ -1453,3 +1705,5 @@ const App = () => {
 };
 
 export default App;
+
+
